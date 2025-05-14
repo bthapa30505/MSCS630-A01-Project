@@ -27,6 +27,43 @@ public class JobManager {
         return id;
     }
 
+    // Retrieve a job by its job ID.
+    public Job getJobById(int id) {
+        return jobs.get(id);
+    }
+
+    // Retrieve a job by its process ID.
+    public Job getJobByPid(long pid) {
+        for (Job job : jobs.values()) {
+            if (getPid(job.getProcess()) == pid) {
+                return job;
+            }
+        }
+        return null;
+    }
+
+    // Remove a job by its job ID.
+    public boolean removeById(int id) {
+        return jobs.remove(id) != null;
+    }
+
+    // Remove a job by its process ID.
+    public boolean removeByPid(long pid) {
+        Integer targetId = null;
+        for (Map.Entry<Integer, Job> entry : jobs.entrySet()) {
+            if (getPid(entry.getValue().getProcess()) == pid) {
+                targetId = entry.getKey();
+                break;
+            }
+        }
+        if (targetId != null) {
+            jobs.remove(targetId);
+            return true;
+        }
+        return false;
+    }
+
+
     //lists all processes/jobs
     public void list() {
         jobs.forEach((id, job) -> {

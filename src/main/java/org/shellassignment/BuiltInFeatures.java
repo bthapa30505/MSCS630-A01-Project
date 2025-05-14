@@ -67,7 +67,7 @@ public class BuiltInFeatures {
                     touch(cmd.args, shell);
                     break;
                 case "kill":
-                    kill(cmd.args);
+                    kill(cmd.args, jobs);
                     break;
                 case "jobs":
                     jobs.list();
@@ -80,7 +80,7 @@ public class BuiltInFeatures {
                     break;
             }
         } catch (Exception e) {
-            System.err.println("builtin error: " + e.getMessage());
+            System.err.println("Token parse error: " + e.getMessage());
         }
     }
 
@@ -157,12 +157,28 @@ public class BuiltInFeatures {
         }
     }
 
-    private static void kill(final String[] args) {
-        for (String pidStr : args) {
+    private static void kill(final String[] args, JobManager jobs) {
+        for (String token : args) {
+            String raw = token.startsWith("%") ? token.substring(1) : token;
+            long pid;
+            if (token.startsWith("%")) {
+                int jobId = Integer.parseInt(raw);
+                Job job = jobs.getJobById(jobId);
+                if (job == null) {
+                    System.err.println("kill: no such job: " + token);
+                    continue;
+                }
+                pid = JobManager.getPid(job.getProcess());
+            } else {
+                pid = Long.parseLong(raw);
+            }
             try {
-                Runtime.getRuntime().exec(new String[]{"kill", "-9", pidStr}).waitFor();
+                Runtime.getRuntime()
+                        .exec(new String[]{"kill", "-9", Long.toString(pid)})
+                        .waitFor();
+                jobs.removeByPid(pid);  // you’d need a remove-by-pid or remove-by-jobId helper
             } catch (IOException | InterruptedException e) {
-                System.err.println("kill: unable to terminate process " + pidStr + ": " + e.getMessage());
+                System.err.println("kill: unable to terminate " + pid + ": " + e.getMessage());
             }
         }
     }

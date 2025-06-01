@@ -7,6 +7,9 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 
 public class BuiltInFeatures {
+    private static RoundRobinScheduler scheduler;
+    private static PriorityScheduler priorityScheduler;
+
     public static boolean isBuiltIn(String cmd) {
         switch (cmd) {
             case "cd":
@@ -24,6 +27,8 @@ public class BuiltInFeatures {
             case "jobs":
             case "fg":
             case "bg":
+            case "schedule":
+            case "priority":
                 return true;
             default:
                 return false;
@@ -77,6 +82,12 @@ public class BuiltInFeatures {
                     break;
                 case "bg":
                     jobs.resumeInBackground(cmd.args);
+                    break;
+                case "schedule":
+                    schedule(cmd.args);
+                    break;
+                case "priority":
+                    priority(cmd.args);
                     break;
             }
         } catch (Exception e) {
@@ -180,6 +191,77 @@ public class BuiltInFeatures {
             } catch (IOException | InterruptedException e) {
                 System.err.println("kill: unable to terminate " + pid + ": " + e.getMessage());
             }
+        }
+    }
+        if (args.length < 2) {
+            System.err.println("Usage: schedule <time_quantum> <burst_time1> <burst_time2> ... [time_unit_ms]");
+            return;
+        }
+
+        try {
+            int timeQuantum = Integer.parseInt(args[0]);
+            int timeUnitMillis = 1000;
+            int burstArgsEnd = args.length;
+            // If last argument is a number and not a burst time, treat as time unit
+            if (args.length > 2) {
+                try {
+                    int possibleTimeUnit = Integer.parseInt(args[args.length - 1]);
+                    // If the number of burst times is at least 1, and the last arg is not a burst time
+                    if (args.length - 2 >= 1 && possibleTimeUnit != Integer.parseInt(args[1])) {
+                        timeUnitMillis = possibleTimeUnit;
+                        burstArgsEnd = args.length - 1;
+                    }
+                } catch (NumberFormatException ignored) {}
+            }
+            scheduler = new RoundRobinScheduler(timeQuantum, timeUnitMillis);
+
+            // Add processes with burst times
+            for (int i = 1; i < burstArgsEnd; i++) {
+                int burstTime = Integer.parseInt(args[i]);
+                scheduler.addProcess(new ScheduledProcess("P" + i, burstTime));
+            }
+
+            // Start scheduling
+            scheduler.schedule();
+            scheduler.printStatistics();
+        } catch (NumberFormatException e) {
+            System.err.println("Error: All arguments must be numbers");
+        }
+    }
+
+    private static void priority(String[] args) {
+        if (args.length < 2 || (args.length % 2 != 0 && args.length % 2 != 1)) {
+            System.err.println("Usage: priority <burst_time1> <priority1> <burst_time2> <priority2> ... [time_unit_ms]");
+            return;
+        }
+
+        try {
+            int timeUnitMillis = 1000;
+            int pairArgsEnd = args.length;
+            // If last argument is a number and not a burst/priority, treat as time unit
+            if (args.length > 2) {
+                try {
+                    int possibleTimeUnit = Integer.parseInt(args[args.length - 1]);
+                    if ((args.length - 1) % 2 == 0) {
+                        timeUnitMillis = possibleTimeUnit;
+                        pairArgsEnd = args.length - 1;
+                    }
+                } catch (NumberFormatException ignored) {}
+            }
+            priorityScheduler = new PriorityScheduler(timeUnitMillis);
+
+            // Add processes with burst times and priorities
+            for (int i = 0; i < pairArgsEnd; i += 2) {
+                int burstTime = Integer.parseInt(args[i]);
+                int priority = Integer.parseInt(args[i + 1]);
+                priorityScheduler.addProcess(new ScheduledProcess("P" + (i/2 + 1), burstTime, priority));
+            }
+
+            // Start scheduling
+            priorityScheduler.schedule();
+            priorityScheduler.printStatistics();
+        } catch (NumberFormatException e) {
+            System.err.println("Error: All arguments must be numbers");
         }
     }
 }

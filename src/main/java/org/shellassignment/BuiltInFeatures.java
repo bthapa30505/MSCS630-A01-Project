@@ -11,6 +11,10 @@ import org.shellassignment.sync.ProducerConsumer;
 import org.shellassignment.memory.MemoryManager;
 import org.shellassignment.memory.Page;
 import org.shellassignment.memory.PageReplacementAlgorithm;
+import org.shellassignment.auth.AuthenticationManager;
+import org.shellassignment.auth.User;
+import org.shellassignment.permissions.PermissionManager;
+import org.shellassignment.permissions.FilePermission;
 
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -19,6 +23,16 @@ public class BuiltInFeatures {
     private static PriorityScheduler priorityScheduler;
     private static final AtomicInteger jobCounter = new AtomicInteger(1);
     private static MemoryManager memoryManager = new MemoryManager(10, PageReplacementAlgorithm.FIFO); // 10 page frames
+    private static AuthenticationManager authManager;
+    private static PermissionManager permissionManager;
+
+    public static void setAuthenticationManager(AuthenticationManager manager) {
+        authManager = manager;
+    }
+
+    public static void setPermissionManager(PermissionManager manager) {
+        permissionManager = manager;
+    }
 
     public static boolean isBuiltIn(String cmd) {
         switch (cmd) {
@@ -47,6 +61,17 @@ public class BuiltInFeatures {
             case "access-page":
             case "free-memory":
             case "set-replacement":
+            case "logout":
+            case "whoami":
+            case "create-user":
+            case "delete-user":
+            case "change-password":
+            case "list-users":
+            case "chmod":
+            case "chown":
+            case "ls-l":
+            case "set-permissions":
+            case "list-permissions":
                 return true;
             default:
                 return false;
@@ -131,6 +156,39 @@ public class BuiltInFeatures {
                 case "set-replacement":
                     setReplacementAlgorithm(cmd.args);
                     break;
+                case "logout":
+                    logout();
+                    break;
+                case "whoami":
+                    whoami();
+                    break;
+                case "create-user":
+                    createUser(cmd.args);
+                    break;
+                case "delete-user":
+                    deleteUser(cmd.args);
+                    break;
+                case "change-password":
+                    changePassword(cmd.args);
+                    break;
+                case "list-users":
+                    listUsers();
+                    break;
+                case "chmod":
+                    chmod(cmd.args, shell);
+                    break;
+                case "chown":
+                    chown(cmd.args, shell);
+                    break;
+                case "ls-l":
+                    lsWithPermissions(shell);
+                    break;
+                case "set-permissions":
+                    setPermissions(cmd.args, shell);
+                    break;
+                case "list-permissions":
+                    listPermissions();
+                    break;
             }
         } catch (Exception e) {
             System.err.println("Token parse error: " + e.getMessage());
@@ -166,22 +224,77 @@ public class BuiltInFeatures {
     }
 
     private static void ls(final Shell shell) throws IOException {
+        if (permissionManager == null) {
+            Files.list(shell.getCurrentDirectory().toPath())
+                    .map(Path::getFileName)
+                    .forEach(System.out::println);
+            return;
+        }
+
+        String currentUser = authManager != null ? authManager.getCurrentUser().getUsername() : "admin";
         Files.list(shell.getCurrentDirectory().toPath())
-                .map(Path::getFileName)
-                .forEach(System.out::println);
+                .forEach(path -> {
+                    String fileName = path.getFileName().toString();
+                    String filePath = path.toString();
+                    
+                    // Check read permission
+                    if (permissionManager.canRead(filePath, currentUser)) {
+                        System.out.println(fileName);
+                    } else {
+                        System.out.println(fileName + " (Permission denied)");
+                    }
+                });
     }
 
     private static void cat(final String[] args, final Shell shell) throws IOException {
+        if (permissionManager == null) {
+            for (String name : args) {
+                Path p = shell.getCurrentDirectory().toPath().resolve(name);
+                Files.lines(p).forEach(System.out::println);
+            }
+            return;
+        }
+
+        String currentUser = authManager != null ? authManager.getCurrentUser().getUsername() : "admin";
         for (String name : args) {
             Path p = shell.getCurrentDirectory().toPath().resolve(name);
+            String filePath = p.toString();
+            
+            if (!permissionManager.canRead(filePath, currentUser)) {
+                System.err.println("cat: Permission denied: " + name);
+                continue;
+            }
+            
             Files.lines(p).forEach(System.out::println);
         }
     }
 
     private static void mkdir(final String[] args, final Shell shell) throws IOException {
+        if (permissionManager == null) {
+            for (String name : args) {
+                Path p = shell.getCurrentDirectory().toPath().resolve(name);
+                Files.createDirectory(p);
+            }
+            return;
+        }
+
+        String currentUser = authManager != null ? authManager.getCurrentUser().getUsername() : "admin";
         for (String name : args) {
             Path p = shell.getCurrentDirectory().toPath().resolve(name);
+            String filePath = p.toString();
+            
+            // Check write permission on parent directory
+            String parentPath = p.getParent().toString();
+            if (!permissionManager.canWrite(parentPath, currentUser)) {
+                System.err.println("mkdir: Permission denied: " + name);
+                continue;
+            }
+            
             Files.createDirectory(p);
+            
+            // Set default permissions for new directory
+            FilePermission permission = permissionManager.createDefaultPermission(currentUser);
+            permissionManager.setFilePermission(filePath, permission);
         }
     }
 
@@ -193,19 +306,66 @@ public class BuiltInFeatures {
     }
 
     private static void rm(final String[] args, final Shell shell) throws IOException {
+        if (permissionManager == null) {
+            for (String name : args) {
+                Path p = shell.getCurrentDirectory().toPath().resolve(name);
+                Files.delete(p);
+            }
+            return;
+        }
+
+        String currentUser = authManager != null ? authManager.getCurrentUser().getUsername() : "admin";
         for (String name : args) {
             Path p = shell.getCurrentDirectory().toPath().resolve(name);
+            String filePath = p.toString();
+            
+            if (!permissionManager.canWrite(filePath, currentUser)) {
+                System.err.println("rm: Permission denied: " + name);
+                continue;
+            }
+            
             Files.delete(p);
+            permissionManager.setFilePermission(filePath, null); // Remove permission entry
         }
     }
 
     private static void touch(final String[] args, final Shell shell) throws IOException {
+        if (permissionManager == null) {
+            for (String name : args) {
+                Path p = shell.getCurrentDirectory().toPath().resolve(name);
+                if (Files.exists(p)) {
+                    Files.setLastModifiedTime(p, java.nio.file.attribute.FileTime.fromMillis(System.currentTimeMillis()));
+                } else {
+                    Files.write(p, new byte[0], StandardOpenOption.CREATE);
+                }
+            }
+            return;
+        }
+
+        String currentUser = authManager != null ? authManager.getCurrentUser().getUsername() : "admin";
         for (String name : args) {
             Path p = shell.getCurrentDirectory().toPath().resolve(name);
+            String filePath = p.toString();
+            
             if (Files.exists(p)) {
+                // Check write permission for existing file
+                if (!permissionManager.canWrite(filePath, currentUser)) {
+                    System.err.println("touch: Permission denied: " + name);
+                    continue;
+                }
                 Files.setLastModifiedTime(p, java.nio.file.attribute.FileTime.fromMillis(System.currentTimeMillis()));
             } else {
+                // Check write permission on parent directory for new file
+                String parentPath = p.getParent().toString();
+                if (!permissionManager.canWrite(parentPath, currentUser)) {
+                    System.err.println("touch: Permission denied: " + name);
+                    continue;
+                }
                 Files.write(p, new byte[0], StandardOpenOption.CREATE);
+                
+                // Set default permissions for new file
+                FilePermission permission = permissionManager.createDefaultPermission(currentUser);
+                permissionManager.setFilePermission(filePath, permission);
             }
         }
     }
@@ -506,6 +666,202 @@ public class BuiltInFeatures {
         } catch (IllegalArgumentException e) {
             System.err.println("Error: Invalid algorithm. Use FIFO or LRU");
         }
+    }
+
+    private static void logout() {
+        if (authManager != null) {
+            authManager.logout();
+        } else {
+            System.out.println("Authentication system not initialized.");
+        }
+    }
+
+    private static void whoami() {
+        if (authManager != null) {
+            authManager.showCurrentUser();
+        } else {
+            System.out.println("Authentication system not initialized.");
+        }
+    }
+
+    private static void createUser(String[] args) {
+        if (args.length < 3) {
+            System.err.println("Usage: create-user <username> <password> <role>");
+            System.err.println("Roles: admin, standard");
+            return;
+        }
+
+        if (authManager != null) {
+            String username = args[0];
+            String password = args[1];
+            String roleStr = args[2].toLowerCase();
+            
+            User.UserRole role;
+            try {
+                role = User.UserRole.valueOf(roleStr.toUpperCase());
+            } catch (IllegalArgumentException e) {
+                System.err.println("Error: Invalid role. Use 'admin' or 'standard'");
+                return;
+            }
+            
+            authManager.createUser(username, password, role);
+        } else {
+            System.out.println("Authentication system not initialized.");
+        }
+    }
+
+    private static void deleteUser(String[] args) {
+        if (args.length < 1) {
+            System.err.println("Usage: delete-user <username>");
+            return;
+        }
+
+        if (authManager != null) {
+            String username = args[0];
+            authManager.deleteUser(username);
+        } else {
+            System.out.println("Authentication system not initialized.");
+        }
+    }
+
+    private static void changePassword(String[] args) {
+        if (args.length < 2) {
+            System.err.println("Usage: change-password <username> <new_password>");
+            return;
+        }
+
+        if (authManager != null) {
+            String username = args[0];
+            String newPassword = args[1];
+            authManager.changePassword(username, newPassword);
+        } else {
+            System.out.println("Authentication system not initialized.");
+        }
+    }
+
+    private static void listUsers() {
+        if (authManager != null) {
+            authManager.listUsers();
+        } else {
+            System.out.println("Authentication system not initialized.");
+        }
+    }
+
+    private static void chmod(String[] args, Shell shell) {
+        if (permissionManager == null) {
+            System.err.println("Permission system not initialized.");
+            return;
+        }
+
+        if (args.length < 2) {
+            System.err.println("Usage: chmod <mode> <file>");
+            System.err.println("Example: chmod rwxr-xr-x myfile.txt");
+            return;
+        }
+
+        String mode = args[0];
+        String fileName = args[1];
+        String currentUser = authManager != null ? authManager.getCurrentUser().getUsername() : "admin";
+        
+        permissionManager.chmod(shell.getCurrentDirectory().toPath().resolve(fileName).toString(), mode, currentUser);
+    }
+
+    private static void chown(String[] args, Shell shell) {
+        if (permissionManager == null) {
+            System.err.println("Permission system not initialized.");
+            return;
+        }
+
+        if (args.length < 2) {
+            System.err.println("Usage: chown <new_owner> <file>");
+            System.err.println("Example: chown john myfile.txt");
+            return;
+        }
+
+        String newOwner = args[0];
+        String fileName = args[1];
+        String currentUser = authManager != null ? authManager.getCurrentUser().getUsername() : "admin";
+        
+        permissionManager.chown(shell.getCurrentDirectory().toPath().resolve(fileName).toString(), newOwner, currentUser);
+    }
+
+    private static void lsWithPermissions(Shell shell) {
+        if (permissionManager == null) {
+            System.err.println("Permission system not initialized.");
+            return;
+        }
+
+        try {
+            String currentUser = authManager != null ? authManager.getCurrentUser().getUsername() : "admin";
+            Files.list(shell.getCurrentDirectory().toPath())
+                    .forEach(path -> {
+                        String fileName = path.getFileName().toString();
+                        String filePath = path.toString();
+                        
+                        FilePermission permission = permissionManager.getFilePermission(filePath);
+                        if (permission != null) {
+                            System.out.println(permission.toDetailedString() + " " + fileName);
+                        } else {
+                            // Default permission display
+                            System.out.println("rw-r--r-- " + currentUser + ":users " + fileName);
+                        }
+                    });
+        } catch (IOException e) {
+            System.err.println("Error listing files: " + e.getMessage());
+        }
+    }
+
+    private static void setPermissions(String[] args, Shell shell) {
+        if (permissionManager == null) {
+            System.err.println("Permission system not initialized.");
+            return;
+        }
+
+        if (args.length < 4) {
+            System.err.println("Usage: set-permissions <file> <owner> <group> <mode>");
+            System.err.println("Example: set-permissions myfile.txt john users rw-r--r--");
+            return;
+        }
+
+        String fileName = args[0];
+        String owner = args[1];
+        String group = args[2];
+        String mode = args[3];
+        
+        // Resolve file path relative to current directory
+        String filePath = shell.getCurrentDirectory().toPath().resolve(fileName).toString();
+        
+        if (mode.length() != 9) {
+            System.err.println("Error: Invalid permission mode. Use format: rwxrwxrwx");
+            return;
+        }
+
+        // Parse permissions
+        java.util.Set<FilePermission.Permission> ownerPerms = parsePermissions(mode.substring(0, 3));
+        java.util.Set<FilePermission.Permission> groupPerms = parsePermissions(mode.substring(3, 6));
+        java.util.Set<FilePermission.Permission> otherPerms = parsePermissions(mode.substring(6, 9));
+
+        permissionManager.setFilePermissions(filePath, owner, group, ownerPerms, groupPerms, otherPerms);
+        System.out.println("Permissions set for " + fileName + ": " + mode);
+    }
+
+    private static java.util.Set<FilePermission.Permission> parsePermissions(String permString) {
+        java.util.Set<FilePermission.Permission> permissions = java.util.EnumSet.noneOf(FilePermission.Permission.class);
+        
+        if (permString.charAt(0) == 'r') permissions.add(FilePermission.Permission.READ);
+        if (permString.charAt(1) == 'w') permissions.add(FilePermission.Permission.WRITE);
+        if (permString.charAt(2) == 'x') permissions.add(FilePermission.Permission.EXECUTE);
+        
+        return permissions;
+    }
+
+    private static void listPermissions() {
+        if (permissionManager == null) {
+            System.err.println("Permission system not initialized.");
+            return;
+        }
+
+        permissionManager.listAllPermissions();
     }
 }
 

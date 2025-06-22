@@ -22,6 +22,16 @@ public class CommandParser {
         }
     }
 
+    public static class PipedCommands {
+        public List<ParsedCommand> commands;
+        public boolean background;
+        public String original;
+
+        public PipedCommands() {
+            this.commands = new ArrayList<>();
+        }
+    }
+
     //This method is used to parse the input provided from the terminal
     public ParsedCommand parse(final String line) {
         ParsedCommand pc = new ParsedCommand();
@@ -45,5 +55,28 @@ public class CommandParser {
                 ? parts.subList(1, parts.size()).toArray(new String[0])
                 : new String[0];
         return pc;
+    }
+
+    public PipedCommands parsePipedCommands(final String line) {
+        PipedCommands piped = new PipedCommands();
+        piped.original = line;
+        
+        // Check if the entire command should run in background
+        boolean background = line.trim().endsWith("&");
+        String commandLine = background ? line.trim().substring(0, line.trim().length() - 1) : line;
+        piped.background = background;
+        
+        // Split by pipe operator
+        String[] commandStrings = commandLine.split("\\|");
+        
+        for (String cmdStr : commandStrings) {
+            cmdStr = cmdStr.trim();
+            if (!cmdStr.isEmpty()) {
+                ParsedCommand cmd = parse(cmdStr);
+                piped.commands.add(cmd);
+            }
+        }
+        
+        return piped;
     }
 }
